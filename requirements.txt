@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+firebase-admin
+google-cloud-firestore
+python-multipart
+openpyxl
+pydantic
+python-jose[cryptography]
+passlib[bcrypt]
+sqlalchemy

@@ -1,0 +1,27 @@
+# Python
+
+# Virtualenv
+.venv/
+
+# Firebase key
+/serviceAccountKey.json
+
+# Node / frontend build
+frontend/build/
+build/
+
+# OS
+.DS_Store
+Thumbs.db
+
+__pycache__/
+.env
+node_modules/
+.DS_Store
+*.pyc
+*.pyo
+*.pyd
+.vscode/
+.idea/
+dist/
+build/
