@@ -4,7 +4,7 @@
 .venv/
 
 # Firebase key
-/serviceAccountKey.json
+serviceAccountKey.json
 
 # Node / frontend build
 frontend/build/

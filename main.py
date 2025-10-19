@@ -10,11 +10,11 @@ from dotenv import load_dotenv
 # --- Загружаем .env локально ---
 load_dotenv()
 
-# --- 🔥 Firebase init через JSON (без Base64) ---
+# --- 🔥 Firebase init через JSON ---
 service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
 
 if not service_account_json:
-    raise RuntimeError("❌ FIREBASE_SERVICE_ACCOUNT не найден в переменных окружения. Добавь его на Render.")
+    raise RuntimeError("❌ FIREBASE_SERVICE_ACCOUNT не найден в переменных окружения.")
 
 try:
     cred_dict = json.loads(service_account_json)
@@ -31,7 +31,11 @@ firestore_db = firestore.client()
 app = FastAPI(title="Montaj Scheduler API (Firestore)")
 
 # --- CORS ---
-origins = os.environ.get("CORS_ORIGINS", "*").split(",")
+origins = [
+    "https://sistemab-montaj-6b8c1.web.app",
+    "https://sistemab-montaj-6b8c1.firebaseapp.com",
+    "http://localhost:5173",  # для локальных тестов
+]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
