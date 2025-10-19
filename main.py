@@ -1,6 +1,5 @@
 import os
 import json
-import base64
 import datetime
 from fastapi import FastAPI, Depends, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
@@ -8,18 +7,19 @@ import firebase_admin
 from firebase_admin import credentials, auth as firebase_auth, firestore
 from dotenv import load_dotenv
 
+# --- Загружаем .env локально ---
 load_dotenv()
 
-# --- 🔥 Firebase init через Base64 ---
-encoded_key_b64 = os.getenv("FIREBASE_KEY_B64")
-if not encoded_key_b64:
-    raise RuntimeError("❌ FIREBASE_KEY_B64 не найден в переменных окружения. Добавь его на Render.")
+# --- 🔥 Firebase init через JSON (без Base64) ---
+service_account_json = os.getenv("FIREBASE_SERVICE_ACCOUNT")
+
+if not service_account_json:
+    raise RuntimeError("❌ FIREBASE_SERVICE_ACCOUNT не найден в переменных окружения. Добавь его на Render.")
 
 try:
-    decoded_bytes = base64.b64decode(encoded_key_b64)
-    cred_dict = json.loads(decoded_bytes)
+    cred_dict = json.loads(service_account_json)
 except Exception as e:
-    raise RuntimeError(f"Ошибка при декодировании FIREBASE_KEY_B64: {e}")
+    raise RuntimeError(f"Ошибка при парсинге FIREBASE_SERVICE_ACCOUNT: {e}")
 
 if not firebase_admin._apps:
     cred = credentials.Certificate(cred_dict)
