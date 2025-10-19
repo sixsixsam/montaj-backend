@@ -2,76 +2,64 @@ import os
 import json
 import base64
 import datetime
-from fastapi import FastAPI, Depends, HTTPException, Request
+from fastapi import FastAPI, Depends, HTTPException, Request, Body
 from fastapi.middleware.cors import CORSMiddleware
+import firebase_admin
+from firebase_admin import credentials, auth as firebase_auth, firestore
 from dotenv import load_dotenv
+
 load_dotenv()
 
- --- 🔥 Firebase закомментирован полностью ---
- import firebase_admin
- from firebase_admin import credentials, auth as firebase_auth, firestore
+# --- 🔥 Firebase init через Base64 ---
+encoded_key_b64 = os.getenv("FIREBASE_KEY_B64")
+if not encoded_key_b64:
+    raise RuntimeError("❌ FIREBASE_KEY_B64 не найден в переменных окружения. Добавь его на Render.")
 
- encoded_key = os.getenv("FIREBASE_KEY")
- if not encoded_key:
-     raise RuntimeError("❌ FIREBASE_KEY не найден в переменных окружения. Добавь его на Render.")
- try:
-     cred_dict = json.loads(encoded_key)
- except Exception as e:
-     raise RuntimeError(f"Ошибка при загрузке FIREBASE_KEY: {e}")
- if not firebase_admin._apps:
-     cred = credentials.Certificate(cred_dict)
-     firebase_admin.initialize_app(cred)
- firestore_db = firestore.client()
+try:
+    decoded_bytes = base64.b64decode(encoded_key_b64)
+    cred_dict = json.loads(decoded_bytes)
+except Exception as e:
+    raise RuntimeError(f"Ошибка при декодировании FIREBASE_KEY_B64: {e}")
 
-# --- Заглушка Firestore для локальной разработки ---
-class DummyCollection:
-    def document(self, _id=None):
-        return self
-    def collection(self, _name):
-        return self
-    def get(self):
-        class DummyDoc:
-            exists = False
-            def to_dict(self):
-                return {}
-        return DummyDoc()
-    def set(self, _payload):
-        return {}
-    def delete(self):
-        return {}
-    def stream(self):
-        return []
-    def where(self, *args, **kwargs):
-        return self
-    def order_by(self, *args, **kwargs):
-        return self
+if not firebase_admin._apps:
+    cred = credentials.Certificate(cred_dict)
+    firebase_admin.initialize_app(cred)
 
-firestore_db = DummyCollection()
+firestore_db = firestore.client()
 
-# --- FastAPI app ---
+# --- FastAPI ---
 app = FastAPI(title="Montaj Scheduler API (Firestore)")
 
 # --- CORS ---
-from fastapi.middleware.cors import CORSMiddleware
-
+origins = os.environ.get("CORS_ORIGINS", "*").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000"
-    ],
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"]
 )
 
-# --- Auth dependencies закомментированы ---
+# --- Auth dependencies ---
 def verify_firebase_token(request: Request):
-    # Просто возвращаем фиктивного пользователя
-    return {"uid": "dummy_uid", "email": "dummy@example.com", "role": "admin"}
+    auth_header = request.headers.get("Authorization")
+    if not auth_header:
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+    parts = auth_header.split()
+    if parts[0].lower() != "bearer" or len(parts) != 2:
+        raise HTTPException(status_code=401, detail="Invalid auth header")
+    id_token = parts[1]
+    try:
+        decoded = firebase_auth.verify_id_token(id_token)
+    except Exception as e:
+        raise HTTPException(status_code=401, detail="Invalid token: " + str(e))
+    uid = decoded.get("uid")
+    role_doc = firestore_db.collection("roles").document(uid).get()
+    role = role_doc.to_dict().get("role") if role_doc.exists else "viewer"
+    return {"uid": uid, "email": decoded.get("email"), "role": role}
 
 def require_role(*allowed_roles):
-    def role_checker(user = Depends(verify_firebase_token)):
+    def role_checker(user=Depends(verify_firebase_token)):
         if user["role"] not in allowed_roles:
             raise HTTPException(status_code=403, detail="Forbidden")
         return user
@@ -82,32 +70,16 @@ def require_role(*allowed_roles):
 def health():
     return {"ok": True}
 
-@app.post("/api/auth/login")
-def login_stub(payload: dict):
-    email = payload.get("email", "demo@example.com")
-    password = payload.get("password", "")
-    return {
-        "idToken": "dummy-token-123",
-        "user": {
-            "uid": "dummy_uid",
-            "email": email,
-            "role": "admin"
-        }
-    }
-
-
-
 @app.get("/api/workers", dependencies=[Depends(require_role('admin','manager','worker','viewer'))])
 def list_workers():
     docs = firestore_db.collection("workers").order_by("name").stream()
-    out = [{"id": getattr(d, 'id', 'dummy_id'), **d.to_dict()} for d in docs]
-    return out
+    return [{"id": d.id, **d.to_dict()} for d in docs]
 
 @app.post("/api/workers", dependencies=[Depends(require_role('admin'))])
-def create_worker(payload: dict):
+def create_worker(payload: dict = Body(...)):
     doc = firestore_db.collection("workers").document()
     doc.set(payload)
-    return {"id": getattr(doc, 'id', 'dummy_id'), **payload}
+    return {"id": doc.id, **payload}
 
 @app.get("/api/workers/{worker_id}/schedule", dependencies=[Depends(require_role('admin','manager','worker','viewer'))])
 def worker_schedule(worker_id: str, days: int = 60):
@@ -134,7 +106,7 @@ def worker_schedule(worker_id: str, days: int = 60):
             e = datetime.date.fromisoformat(a["end_date"])
             if s <= cur <= e:
                 proj = firestore_db.collection("projects").document(a["project_id"]).get()
-                pname = proj.to_dict().get("name") if getattr(proj, 'exists', False) else None
+                pname = proj.to_dict().get("name") if proj.exists else None
                 cell = {"date": cur.isoformat(), "project": pname, "project_id": a["project_id"]}
                 break
         calendar.append(cell)
@@ -144,20 +116,20 @@ def worker_schedule(worker_id: str, days: int = 60):
     history = [h.to_dict() for h in history_q]
 
     worker_doc = firestore_db.collection("workers").document(worker_id).get()
-    worker = worker_doc.to_dict() if getattr(worker_doc, 'exists', False) else {"id": worker_id, "name": "Unknown", "phone": None, "active": True}
+    worker = worker_doc.to_dict() if worker_doc.exists else {"id": worker_id, "name": "Unknown", "phone": None, "active": True}
 
     return {"worker": worker, "current": current, "next": next_assign, "calendar": calendar, "history": history}
 
 @app.post("/api/assignments", dependencies=[Depends(require_role('admin'))])
-def create_assignment(payload: dict):
+def create_assignment(payload: dict = Body(...)):
     doc = firestore_db.collection("assignments").document()
     doc.set(payload)
-    return {"id": getattr(doc, 'id', 'dummy_id'), **payload}
+    return {"id": doc.id, **payload}
 
 @app.delete("/api/assignments/{assignment_id}", dependencies=[Depends(require_role('admin'))])
 def delete_assignment(assignment_id: str):
     a_doc = firestore_db.collection("assignments").document(assignment_id).get()
-    if not getattr(a_doc, 'exists', False):
+    if not a_doc.exists:
         raise HTTPException(status_code=404, detail="Not found")
     a = a_doc.to_dict()
     today = datetime.date.today()
@@ -183,22 +155,22 @@ def delete_assignment(assignment_id: str):
 @app.get("/api/projects", dependencies=[Depends(require_role('admin','manager','worker','viewer'))])
 def list_projects():
     docs = firestore_db.collection("projects").order_by("name").stream()
-    return [{"id": getattr(d, 'id', 'dummy_id'), **d.to_dict()} for d in docs]
+    return [{"id": d.id, **d.to_dict()} for d in docs]
 
 @app.post("/api/projects", dependencies=[Depends(require_role('admin','manager'))])
-def create_project(payload: dict, user = Depends(verify_firebase_token)):
+def create_project(payload: dict = Body(...), user=Depends(verify_firebase_token)):
     doc = firestore_db.collection("projects").document()
     payload["manager_uid"] = user["uid"]
     doc.set(payload)
-    return {"id": getattr(doc, 'id', 'dummy_id'), **payload}
+    return {"id": doc.id, **payload}
 
 @app.post("/api/comments", dependencies=[Depends(require_role('admin','manager'))])
-def add_comment(payload: dict, user = Depends(verify_firebase_token)):
+def add_comment(payload: dict = Body(...), user=Depends(verify_firebase_token)):
     payload["author_uid"] = user["uid"]
     payload["created_at"] = datetime.datetime.utcnow().isoformat()
     doc = firestore_db.collection("comments").document()
     doc.set(payload)
-    return {"id": getattr(doc, 'id', 'dummy_id')}
+    return {"id": doc.id}
 
 @app.get("/api/comments/{worker_id}", dependencies=[Depends(require_role('admin','manager','worker','viewer'))])
 def get_comments(worker_id: str):
